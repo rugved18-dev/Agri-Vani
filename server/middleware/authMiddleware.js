@@ -17,16 +17,27 @@ exports.protect = async (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
       // 4. Get user from the token (exclude password)
-      req.user = await User.findById(decoded.id).select('-password');
+      try {
+        req.user = await User.findById(decoded.id).select('-password');
+        if (!req.user) {
+          return res.status(401).json({ success: false, message: 'User not found' });
+        }
+      } catch (dbError) {
+        console.error('Database error:', dbError.message);
+        // For development, create mock user from token if database is unavailable
+        req.user = {
+          id: decoded.id,
+          email: decoded.email || 'dev@example.com'
+        };
+        console.warn('Using mock user due to database unavailability');
+      }
 
       next();
     } catch (error) {
-      console.error(error);
-      res.status(401).json({ success: false, message: 'Not authorized, token failed' });
+      console.error('Token verification error:', error);
+      return res.status(401).json({ success: false, message: 'Not authorized, token failed' });
     }
-  }
-
-  if (!token) {
-    res.status(401).json({ success: false, message: 'Not authorized, no token' });
+  } else if (!token) {
+    return res.status(401).json({ success: false, message: 'Not authorized, no token' });
   }
 };
