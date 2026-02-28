@@ -1,4 +1,5 @@
 import os
+import base64
 import numpy as np
 import requests
 from flask import Flask, request, jsonify
@@ -18,85 +19,134 @@ except Exception as e:
     print("Make sure 'plant_disease_model.h5' is in the ai-engine folder!")
     exit()
 
-# --- 2. DEFINE THE CLASS NAMES ---
-# These must match the order from your Google Colab training EXACTLY.
-# Based on PlantVillage, here are the standard classes:
+# --- 2. CLASS NAMES (full PlantVillage 38-class dataset) ---
 CLASS_NAMES = [
-    'Pepper__bell___Bacterial_spot', 'Pepper__bell___healthy',
-    'Potato___Early_blight', 'Potato___Late_blight', 'Potato___healthy',
-    'Tomato___Bacterial_spot', 'Tomato___Early_blight', 'Tomato___Late_blight',
-    'Tomato___Leaf_Mold', 'Tomato___Septoria_leaf_spot',
-    'Tomato___Spider_mites Two-spotted_spider_mite', 'Tomato___Target_Spot',
-    'Tomato___Tomato_Yellow_Leaf_Curl_Virus', 'Tomato___Tomato_mosaic_virus',
-    'Tomato___healthy'
+    'Apple___Apple_scab',
+    'Apple___Black_rot',
+    'Apple___Cedar_apple_rust',
+    'Apple___healthy',
+    'Blueberry___healthy',
+    'Cherry_(including_sour)___Powdery_mildew',
+    'Cherry_(including_sour)___healthy',
+    'Corn_(maize)___Cercospora_leaf_spot Gray_leaf_spot',
+    'Corn_(maize)___Common_rust_',
+    'Corn_(maize)___Northern_Leaf_Blight',
+    'Corn_(maize)___healthy',
+    'Grape___Black_rot',
+    'Grape___Esca_(Black_Measles)',
+    'Grape___Leaf_blight_(Isariopsis_Leaf_Spot)',
+    'Grape___healthy',
+    'Orange___Haunglongbing_(Citrus_greening)',
+    'Peach___Bacterial_spot',
+    'Peach___healthy',
+    'Pepper,_bell___Bacterial_spot',
+    'Pepper,_bell___healthy',
+    'Potato___Early_blight',
+    'Potato___Late_blight',
+    'Potato___healthy',
+    'Raspberry___healthy',
+    'Soybean___healthy',
+    'Squash___Powdery_mildew',
+    'Strawberry___Leaf_scorch',
+    'Strawberry___healthy',
+    'Tomato___Bacterial_spot',
+    'Tomato___Early_blight',
+    'Tomato___Late_blight',
+    'Tomato___Leaf_Mold',
+    'Tomato___Septoria_leaf_spot',
+    'Tomato___Spider_mites Two-spotted_spider_mite',
+    'Tomato___Target_Spot',
+    'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
+    'Tomato___Tomato_mosaic_virus',
+    'Tomato___healthy',
 ]
 
-# --- 3. HELPER FUNCTION: PREPARE IMAGE ---
-# --- 3. HELPER FUNCTION: PREPARE IMAGE ---
-def prepare_image(image_url):
-    # 1. Define Headers (The "Fake ID") - MUST BE HERE
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
-    }
+# Validate that the model output size matches CLASS_NAMES
+try:
+    model_output_classes = model.output_shape[-1]
+    if model_output_classes != len(CLASS_NAMES):
+        print(f"⚠️  WARNING: Model has {model_output_classes} output classes but CLASS_NAMES has {len(CLASS_NAMES)} entries!")
+        print(f"   Truncating/padding CLASS_NAMES to match model output ({model_output_classes} classes)")
+        if model_output_classes < len(CLASS_NAMES):
+            CLASS_NAMES = CLASS_NAMES[:model_output_classes]
+        else:
+            CLASS_NAMES += [f'Unknown_class_{i}' for i in range(len(CLASS_NAMES), model_output_classes)]
+    print(f"✅ CLASS_NAMES validated: {len(CLASS_NAMES)} classes match model output")
+except Exception as e:
+    print(f"⚠️  Could not validate model output shape: {e}")
 
-    # 2. Download the Image
-    response = requests.get(image_url, headers=headers)
-    
-    # Check if download worked
+
+SOLUTIONS = {
+    "healthy": "Your crop looks healthy! Keep monitoring water and nutrients.",
+    "Bacterial_spot": "Use copper-based fungicides. Remove and destroy infected leaves.",
+    "Early_blight": "Remove infected leaves. Ensure good airflow. Apply chlorothalonil fungicide.",
+    "Late_blight": "Apply fungicides immediately. Avoid overhead watering. Destroy infected plants.",
+    "Leaf_Mold": "Improve ventilation. Apply fungicides. Avoid leaf wetness.",
+    "Septoria_leaf_spot": "Remove infected leaves. Apply fungicide at first sign.",
+    "Spider_mites": "Use miticide or neem oil. Keep plants well-watered.",
+    "Target_Spot": "Apply fungicide. Remove severely infected leaves.",
+    "Yellow_Leaf_Curl_Virus": "Control whiteflies (vector). Remove infected plants.",
+    "mosaic_virus": "Remove infected plants. Control aphids. Use virus-free seeds.",
+}
+
+def get_solution(disease_name):
+    for keyword, solution in SOLUTIONS.items():
+        if keyword.lower() in disease_name.lower():
+            return solution
+    return "Consult a local agricultural expert for treatment advice."
+
+def prepare_image_from_bytes(image_bytes):
+    """Process raw image bytes into model input."""
+    img = Image.open(BytesIO(image_bytes))
+    img = img.convert('RGB')
+    img = img.resize((128, 128))
+    img_array = tf.keras.preprocessing.image.img_to_array(img)
+    img_array = tf.expand_dims(img_array, 0)
+    return img_array
+
+def prepare_image_from_url(image_url):
+    """Download image from URL and prepare for model."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    response = requests.get(image_url, headers=headers, timeout=30)
     if response.status_code != 200:
         raise Exception(f"Failed to download image. Status: {response.status_code}")
+    return prepare_image_from_bytes(response.content)
 
-    # 3. Process the Image
-    img = Image.open(BytesIO(response.content))
-    img = img.convert('RGB') # Fix for PNG/Transparency issues
-    
-    # IMPORTANT: Resize to 128x128 (Must match your Training Model)
-    img = img.resize((128, 128)) 
-    
-    img_array = tf.keras.preprocessing.image.img_to_array(img)
-    img_array = tf.expand_dims(img_array, 0) 
-    return img_array
 @app.route('/', methods=['GET'])
 def home():
-    return "🧠 Real AI Engine is Running!"
+    return "🧠 Agri-Vani AI Engine is Running!"
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         data = request.json
         image_url = data.get('imageUrl')
+        image_base64 = data.get('imageBase64')
 
-        if not image_url:
-            return jsonify({"error": "No image URL provided"}), 400
+        if not image_url and not image_base64:
+            return jsonify({"error": "Provide either 'imageUrl' or 'imageBase64'"}), 400
 
-        print(f"📸 Downloading & Analyzing: {image_url}")
+        if image_base64:
+            # ✅ Direct base64 — no cloud download needed
+            print("📸 Analyzing image from base64...")
+            image_bytes = base64.b64decode(image_base64)
+            processed_image = prepare_image_from_bytes(image_bytes)
+        else:
+            # Fallback: download from URL
+            print(f"📸 Downloading & Analyzing: {image_url}")
+            processed_image = prepare_image_from_url(image_url)
 
-        # 1. Preprocess the image
-        processed_image = prepare_image(image_url)
-
-        # 2. Ask the Brain (Model)
         predictions = model.predict(processed_image)
-        
-        # 3. Find the highest confidence score
         score = tf.nn.softmax(predictions[0])
         class_index = np.argmax(score)
-        confidence = round(100 * np.max(score), 2)
+        confidence = round(100 * float(np.max(score)), 2)
         predicted_disease = CLASS_NAMES[class_index]
-
-        # 4. Generate a Solution (Simple lookup)
-        # You can expand this dictionary later!
-        solution = "Consult an expert."
-        if "healthy" in predicted_disease:
-            solution = "Your crop looks healthy! Keep monitoring water."
-        elif "Bacterial_spot" in predicted_disease:
-            solution = "Use copper-based fungicides."
-        elif "Early_blight" in predicted_disease:
-            solution = "Remove infected leaves and ensure good airflow."
-        elif "Late_blight" in predicted_disease:
-            solution = "Apply fungicides immediately and avoid overhead watering."
+        solution = get_solution(predicted_disease)
 
         result = {
-            "disease": predicted_disease.replace("_", " "), # Make it readable
+            "disease": predicted_disease.replace("_", " "),
             "confidence": confidence,
             "solution": solution
         }
@@ -107,8 +157,6 @@ def predict():
     except Exception as e:
         print(f"❌ Error: {e}")
         return jsonify({"error": str(e)}), 500
-    
-
 
 if __name__ == '__main__':
-    app.run(port=5002, debug=True)
+    app.run(host='0.0.0.0', port=5002, debug=True)

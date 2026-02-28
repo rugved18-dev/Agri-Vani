@@ -27,7 +27,7 @@ const UserSchema = new mongoose.Schema(
     },
     language: {
       type: String,
-      enum: ['en', 'hi', 'mr'],
+      enum: ['en', 'hi', 'mr', 'bn', 'te', 'ta', 'gu', 'kn', 'ml', 'pa'],
       default: 'en',
     },
     // --- UPDATED: Structured Location for APIs ---
@@ -58,7 +58,7 @@ const UserSchema = new mongoose.Schema(
       default: 'user'
     }
   },
-  { 
+  {
     timestamps: true,
     collection: 'users'
   }

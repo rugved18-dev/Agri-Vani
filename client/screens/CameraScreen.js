@@ -4,7 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import api from '../api'; 
+import api, { uploadApi } from '../api';
 
 export default function CameraScreen({ navigation }) {
   const [permission, requestPermission] = useCameraPermissions();
@@ -29,10 +29,11 @@ export default function CameraScreen({ navigation }) {
 
   const pickImage = async () => {
     let result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: [ImagePicker.MediaType.IMAGE],
       allowsEditing: true,
       aspect: [1, 1],
-      quality: 1,
+      quality: 0.5,      // compress to reduce base64 size
+      base64: true,      // ✅ get base64 data directly
     });
     if (!result.canceled) setPhoto(result.assets[0]);
   };
@@ -40,10 +41,13 @@ export default function CameraScreen({ navigation }) {
   const takePicture = async () => {
     if (cameraRef.current) {
       try {
-        const photoData = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: false });
+        const photoData = await cameraRef.current.takePictureAsync({
+          quality: 0.5,   // compress to reduce base64 size
+          base64: true,   // ✅ get base64 data directly
+        });
         setPhoto(photoData);
       } catch (error) {
-        Alert.alert("Error", "Failed to take picture");
+        Alert.alert('Error', 'Failed to take picture');
       }
     }
   };
@@ -52,40 +56,40 @@ export default function CameraScreen({ navigation }) {
     if (!photo) return;
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append('image', {
-        uri: photo.uri,
-        name: 'scan.jpg',
-        type: 'image/jpeg',
-      });
+      const base64Data = photo.base64;
 
-      // 1. Upload
-      const uploadRes = await api.post('/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const cloudUrl = uploadRes.data.imageUrl;
+      if (!base64Data) {
+        Alert.alert('Error', 'Could not read image data. Please retake the photo.');
+        setLoading(false);
+        return;
+      }
 
-      // 2. Scan
-      const scanRes = await api.post('/scans', {
-        imageUrl: cloudUrl,
-        cropName: 'Tomato' 
+      // ✅ Single call: send base64 directly to /api/scans — no upload step needed
+      console.log('🌿 Sending image to AI for analysis...');
+      const scanRes = await uploadApi.post('/scans', {
+        imageBase64: base64Data,
+        imageUrl: 'base64-image',
+        cropName: 'Tomato',
       });
 
       const result = scanRes.data.data;
+      console.log('✅ Scan complete:', result.diseaseName);
 
       Alert.alert(
-        "Diagnosis Complete 🌿",
+        'Diagnosis Complete 🌿',
         `Disease: ${result.diseaseName}\nConfidence: ${result.confidence}%\nSolution: ${result.solution}`,
-        [{ text: "OK" }]
+        [{ text: 'OK' }]
       );
 
     } catch (error) {
-      console.error("AI Error:", error);
-      Alert.alert("Connection Error", "Check your Wi-Fi and IP Address.");
+      console.error('AI Error:', error);
+      const msg = error.response?.data?.message || error.message || 'Unknown error';
+      Alert.alert('Analysis Failed', `Error: ${msg}\n\nMake sure all 3 servers are running.`);
     } finally {
       setLoading(false);
     }
   };
+
 
   const toggleCameraFacing = () => {
     setFacing(current => (current === 'back' ? 'front' : 'back'));
@@ -98,7 +102,7 @@ export default function CameraScreen({ navigation }) {
         {loading && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color="#4CAF50" />
-            <Text style={{color: 'white', marginTop: 10}}>Diagnosing...</Text>
+            <Text style={{ color: 'white', marginTop: 10 }}>Diagnosing...</Text>
           </View>
         )}
         <View style={styles.actionButtons}>
@@ -117,10 +121,10 @@ export default function CameraScreen({ navigation }) {
     <View style={styles.container}>
       {/* 1. THE CAMERA LAYER (Background) */}
       <CameraView style={StyleSheet.absoluteFill} facing={facing} ref={cameraRef} />
-      
+
       {/* 2. THE UI LAYER (Foreground) - Now Outside the Camera Tag */}
       <SafeAreaView style={styles.uiContainer}>
-        
+
         {/* Top Controls */}
         <View style={styles.topControls}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
@@ -140,8 +144,8 @@ export default function CameraScreen({ navigation }) {
           <TouchableOpacity onPress={takePicture} style={styles.captureBtn}>
             <View style={styles.captureInner} />
           </TouchableOpacity>
-          
-          <View style={{ width: 50 }} /> 
+
+          <View style={{ width: 50 }} />
         </View>
 
       </SafeAreaView>

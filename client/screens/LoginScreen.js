@@ -10,13 +10,9 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-// FIX 1: Import SafeAreaView from the correct library
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-/**
- * TASK 3: Login Screen
- */
 const LoginScreen = ({ navigation }) => {
   const [mobileNumber, setMobileNumber] = useState('');
   const [selectedLanguage, setSelectedLanguage] = useState('en');
@@ -24,17 +20,11 @@ const LoginScreen = ({ navigation }) => {
   const [isCheckingLanguage, setIsCheckingLanguage] = useState(true);
 
   const languageNames = {
-  en: 'English',
-  hi: 'हिंदी',
-  mr: 'मराठी',
-  bn: 'বাংলা',
-  te: 'తెలుగు',
-  ta: 'தமிழ்',
-  gu: 'ગુજરાતી',
-  kn: 'ಕನ್ನಡ',
-  ml: 'മലയാളം',
-  pa: 'ਪੰਜਾਬੀ'
-};
+    en: 'English', hi: 'हिंदी', mr: 'मराठी', bn: 'বাংলা',
+    te: 'తెలుగు', ta: 'தமிழ்', gu: 'ગુજરાતી', kn: 'ಕನ್ನಡ',
+    ml: 'മലയാളം', pa: 'ਪੰਜਾਬੀ'
+  };
+
   useEffect(() => {
     const getLanguage = async () => {
       try {
@@ -53,12 +43,10 @@ const LoginScreen = ({ navigation }) => {
 
   const handleLogin = async () => {
     try {
-      // 1. Validation
       if (!mobileNumber.trim()) {
         Alert.alert('Error', 'Please enter your mobile number');
         return;
       }
-
       if (!isValidMobileNumber(mobileNumber)) {
         Alert.alert('Invalid Number', 'Please enter a valid 10-digit Indian mobile number');
         return;
@@ -66,43 +54,66 @@ const LoginScreen = ({ navigation }) => {
 
       setIsLoading(true);
 
-      // --- BACKEND CONNECTION ---
-      // Server runs on port 5000 with /api/users/register endpoint
-      const API_URL = 'http://10.155.222.31:5000/api/users/register'; 
+      // ✅ Uses env-configured API URL (port 5001, correct /api/auth route)
+      const API_BASE = process.env.EXPO_PUBLIC_API_URL || 'http://10.155.222.31:5001/api';
+      console.log('🔐 API Base:', API_BASE);
 
-      console.log("Connecting to:", API_URL);
-
-      const response = await fetch(API_URL, {
+      // Step 1: Try to register (creates account if user is new)
+      const registerRes = await fetch(`${API_BASE}/auth/register`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mobileNumber: mobileNumber,
-          language: selectedLanguage
+          mobileNumber,
+          language: selectedLanguage,
+          name: `Farmer_${mobileNumber.slice(-4)}`,
+          password: mobileNumber, // phone number = password for simplicity
         }),
       });
 
-      const data = await response.json();
+      const registerData = await registerRes.json();
+      console.log('📩 Register response:', JSON.stringify(registerData));
 
-      if (!response.ok) {
-        throw new Error(data.message || 'Server Error');
+      let userId, token;
+
+      if (registerRes.ok && registerData.success) {
+        // ✅ New user registered — shape: { success, token, user: { id, name, ... } }
+        userId = registerData.user?.id;
+        token = registerData.token;
+
+      } else if (registerData.message === 'User already exists') {
+        // ✅ Existing user — log them in
+        console.log('ℹ️ User exists, logging in...');
+
+        const loginRes = await fetch(`${API_BASE}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mobileNumber, password: mobileNumber }),
+        });
+        const loginData = await loginRes.json();
+        console.log('📩 Login response:', JSON.stringify(loginData));
+
+        if (!loginRes.ok) throw new Error(loginData.message || 'Login failed');
+        userId = loginData.user?.id;
+        token = loginData.token;
+
+      } else {
+        throw new Error(registerData.message || 'Authentication failed');
       }
-      // ------------------------------------
 
-      // 2. Save the Real User Data from Server
-      await AsyncStorage.setItem('userMobileNumber', mobileNumber);
-      await AsyncStorage.setItem('userId', data.data._id); // MongoDB returns _id, not userId
-      await AsyncStorage.setItem('isLoggedIn', 'true');
-      await AsyncStorage.setItem('token', data.data._id || 'session-token'); // Use _id as temporary token
+      // Step 2: Save session to local storage
+      await AsyncStorage.multiSet([
+        ['userMobileNumber', mobileNumber],
+        ['userId', userId || ''],
+        ['isLoggedIn', 'true'],
+        ['token', token || ''],
+      ]);
 
-      // 3. Navigate
       setIsLoading(false);
       navigation.replace('Home');
 
     } catch (error) {
       console.error('Login error:', error);
-      Alert.alert('Connection Failed', 'Could not connect to the server. \n\nCheck your IP Address or make sure the Backend is running.');
+      Alert.alert('Connection Failed', `Could not connect to server.\n\nError: ${error.message}`);
       setIsLoading(false);
     }
   };
@@ -176,13 +187,13 @@ const LoginScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           <View style={styles.infoSection}>
-            <Text style={styles.infoText}>📞 We will send an OTP to verify your number</Text>
+            <Text style={styles.infoText}>📞 Enter your mobile number to login or register</Text>
           </View>
         </View>
       </KeyboardAvoidingView>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>By continuing, you agree to our Terms & Conditions</Text>
+        <Text style={styles.footerText}>By continuing, you agree to our Terms &amp; Conditions</Text>
       </View>
     </SafeAreaView>
   );

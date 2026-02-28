@@ -61,14 +61,23 @@ exports.login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    // 3. Check if password matches
+    // 3. Handle legacy accounts with no password stored
+    if (!user.password) {
+      console.log(`⚠️ No password for user ${mobileNumber} — setting mobile number as password`);
+      const bcrypt = require('bcryptjs');
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
+      await user.save({ validateBeforeSave: false });
+    }
+
+    // 4. Check if password matches
     const isMatch = await user.matchPassword(password);
 
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    // 4. Generate Token
+    // 5. Generate Token
     const token = user.getSignedJwtToken();
 
     res.status(200).json({
@@ -83,6 +92,7 @@ exports.login = async (req, res) => {
     });
 
   } catch (error) {
+    console.error('Login error:', error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 };
